@@ -12,16 +12,12 @@ Original file is located at
 
 import json
 import os
-
-# Cloud Run では HTML 生成が不要なのでデフォルトで無効
-NO_HTML = os.getenv("NO_HTML", "1") == "1"
-# Excel 出力は不要（要求によりデフォルト無効）
-DISABLE_EXCEL = os.getenv("DISABLE_EXCEL", "1") == "1"
 try:
-    from IPython.display import HTML, display
+    from IPython.display import HTML
 except Exception:
     HTML = None
-    display = None
+NO_HTML = os.getenv("NO_HTML", "1") == "1"   # Cloud RunではデフォルトでHTML無し
+
 
 # --- Colab専用：JS→Python コールバック登録 ---
 try:
@@ -33,9 +29,6 @@ except Exception:
 
 # 保存先（Colab実行ディレクトリ）
 OUTPUT_PATH = "output_updated.json"
-
-# HTML出力先（Cloud Run でS3アップロードするため）
-HTML_OUTPUT_PATH = os.getenv("HTML_OUTPUT_PATH", "report.html")
 
 # Excel転記先（決算期=第何期・決算年月日）
 EXCEL_PATH = "/content/CF付財務分析表（経営指標あり）_ReadingData.xlsx"
@@ -123,10 +116,83 @@ def _save_output_updated_json(payload):
         size = os.path.getsize(abs_path) if exists else -1
 
         # -----------------------------
-        # Excel へ転記（Cloud Runでは不要のため無効化）
+        # Excel へ転記（決算年月日: E4/G4/J4, 第何期: E5/G5/J5）
         # -----------------------------
         excel_updated = False
-        excel_error = "DISABLE_EXCEL" if DISABLE_EXCEL else ""
+        excel_error = ""
+        try:
+            period_numbers = payload.get("period_numbers", {}) or {}
+            if not isinstance(period_numbers, dict):
+                raise ValueError("payload['period_numbers'] must be a dict.")
+
+            # 期数：1以上の整数のみ許可（"11" / "11期" / "第11期" などは数字抽出で許容）
+            cleaned = {}
+            import re as _re
+            for k in ["前々期", "前期", "今期"]:
+                v = period_numbers.get(k, None)
+                if v is None or v == "":
+                    continue
+                if isinstance(v, bool):
+                    raise ValueError(f"{k} must be a positive integer.")
+
+                if isinstance(v, (int, float)):
+                    iv = int(v)
+                    if float(v) != float(iv):
+                        raise ValueError(f"{k} must be an integer.")
+                    if iv < 1:
+                        raise ValueError(f"{k} must be >= 1.")
+                    cleaned[k] = iv
+                    continue
+
+                s = str(v).strip()
+                digits = "".join(_re.findall(r"\d+", s))
+                if digits == "":
+                    raise ValueError(f"{k} must be a positive integer.")
+                iv = int(digits)
+                if iv < 1:
+                    raise ValueError(f"{k} must be >= 1.")
+                cleaned[k] = iv
+
+            # 決算年月日（output.json から読んだ closing_dates を転記）
+            dates = {
+                "前々期": closing_dates.get("前々期", "") or "",
+                "前期": closing_dates.get("前期", "") or "",
+                "今期": closing_dates.get("今期", "") or "",
+            }
+
+            # Excel 転記
+            try:
+                from openpyxl import load_workbook
+            except Exception as e:
+                raise RuntimeError("openpyxl is required to write Excel.") from e
+
+            if not os.path.exists(EXCEL_PATH):
+                raise FileNotFoundError(f"Excel file not found: {EXCEL_PATH}")
+
+            wb = load_workbook(EXCEL_PATH)
+            if EXCEL_SHEET_NAME not in wb.sheetnames:
+                raise KeyError(f"Sheet not found: {EXCEL_SHEET_NAME}")
+
+            ws = wb[EXCEL_SHEET_NAME]
+
+            for k, (cell_date, cell_period) in EXCEL_PERIOD_CELLS.items():
+                # 決算年月日（常に転記）
+                ws[cell_date].value = dates.get(k, "")
+
+                # 第何期（入力がある場合は「●●期」、未入力なら「前々期/前期/今期」のまま転記）
+                ws[cell_period].number_format = "@"
+                if k in cleaned:
+                    ws[cell_period].value = f"{cleaned[k]}期"
+                else:
+                    ws[cell_period].value = k
+
+            wb.save(EXCEL_PATH)
+            excel_updated = True
+
+        except Exception as e:
+            excel_updated = False
+            excel_error = str(e)
+
         return {
             "ok": True,
             "path": abs_path,
@@ -745,9 +811,6 @@ td.kubun-cell { padding: 0 !important; text-align: center !important; }
   color: white;
 }
 .period-btn.primary:hover{filter: brightness(1.03);}
-.debit-credit-alert td {
-    background-color: #ffff00 !important;
-}
 
 </style>
 """
@@ -1216,14 +1279,6 @@ def _style_for_left_cell(d: dict) -> str:
 
 
 def render_rows(start, end, left_layout=None):
-    def _to_float_for_highlight(x):
-      try:
-          if x in ['""', '\"\"', None, ""]:
-              return 0.0
-          return float(str(x).replace(",", ""))
-      except:
-          return 0.0
-
     h = ""
 
     for i in range(start, end + 1):
@@ -1316,20 +1371,6 @@ def render_rows(start, end, left_layout=None):
                 if (d.get("text", "") or "").strip() == "{区分}" or (d.get("text", "") or "").strip() == "｛区分｝":
                     extra_cls = ' class="kubun-cell"'
 
-                if i == 76 and cs == 4:
-                    try:
-                        v1 = _to_float_for_highlight(row.get("前々期"))
-                        v2 = _to_float_for_highlight(row.get("前期"))
-                        v3 = _to_float_for_highlight(row.get("今期"))
-                        if v1 != 0 or v2 != 0 or v3 != 0:
-                            if style:
-                                style += "; background-color:#ffff00"
-                            else:
-                                style = "background-color:#ffff00"
-                            st_attr = f' style="{style}"'
-                    except:
-                        pass
-
                 h += f'<td{extra_cls}{cs_attr}{rs_attr}{st_attr}>{text}</td>'
                 continue
 
@@ -1338,35 +1379,7 @@ def render_rows(start, end, left_layout=None):
                 # ★ 勘定科目列(c=3)が結合に含まれている行では、絶対に勘定科目セルを出さない
                 if subject_cell_in_merge:
                     continue
-
-                # --- 借方／貸方照合（76行）差異判定 ---
-                diff_cols = set()
-                highlight_label = False
-
-                if i == 76:
-                    try:
-                        v1 = float(str(row.get("前々期", 0)).replace(",", "") or 0)
-                        v2 = float(str(row.get("前期", 0)).replace(",", "") or 0)
-                        v3 = float(str(row.get("今期", 0)).replace(",", "") or 0)
-                    except:
-                        v1 = v2 = v3 = 0
-
-                    if v1 != 0:
-                        diff_cols.add("前々期")
-                        highlight_label = True
-                    if v2 != 0:
-                        diff_cols.add("前期")
-                        highlight_label = True
-                    if v3 != 0:
-                        diff_cols.add("今期")
-                        highlight_label = True
-
-                subject_style = "font-weight:bold; text-align:left; vertical-align:middle; padding-left:8px;"
-                if i == 76 and highlight_label:
-                    subject_style += " background-color:#ffff00;"
-
-                h += f'<td class="w-subject" style="{subject_style}">{subject}</td>'
-
+                h += f'<td class="w-subject" style="font-weight:bold; text-align:left; vertical-align:middle; padding-left:8px;">{subject}</td>'
             else:
                 if c == 2:
                     kubun_raw2 = str((row.get("区分", "") or "")).strip()
@@ -1425,18 +1438,7 @@ def render_rows(start, end, left_layout=None):
                 else:
                     disp = (f'<input type="number" step="1" id="inp-r{i}-{k}" name="inp-r{i}-{k}" value="{int(round(num_v))}" '
                             f'style="width:100%; box-sizing:border-box; text-align:right; font-family:Consolas, monospace;">')
-                cell_attr = row_bg_attr
-
-                if i == 76 and k in ["前々期", "前期", "今期"]:
-                    v = _to_float_for_highlight(row.get(k))
-                    if v != 0:
-                        if cell_attr:
-                            cell_attr = cell_attr[:-1] + "; background-color:#ffff00\""
-                        else:
-                            cell_attr = ' style="background-color:#ffff00"'
-
-                h += f'<td class="{c_cls}"{cell_attr}>{disp}</td>'
-
+                h += f'<td class="{c_cls}"{row_bg_attr}>{disp}</td>'
                 continue
 
             if i in [155, 156, 157, 158] and k in ["前々期", "前期", "今期"]:
@@ -1445,18 +1447,7 @@ def render_rows(start, end, left_layout=None):
                 except:
                     num_v = 0.0
                 disp = (f'<input type="number" step="1" id="inp-r{i}-{k}" name="inp-r{i}-{k}" value="{int(round(num_v))}" 'f'style="width:100%; box-sizing:border-box; text-align:right; font-family:Consolas, monospace;">')
-                cell_attr = row_bg_attr
-
-                if i == 76 and k in ["前々期", "前期", "今期"]:
-                    v = _to_float_for_highlight(row.get(k))
-                    if v != 0:
-                        if cell_attr:
-                            cell_attr = cell_attr[:-1] + "; background-color:#ffff00\""
-                        else:
-                            cell_attr = ' style="background-color:#ffff00"'
-
-                h += f'<td class="{c_cls}"{cell_attr}>{disp}</td>'
-
+                h += f'<td class="{c_cls}"{row_bg_attr}>{disp}</td>'
                 continue
 
             if i == 159:
@@ -1466,18 +1457,7 @@ def render_rows(start, end, left_layout=None):
                     except:
                         num_v = 0.0
                     disp = f'<span id="calc-r159-{k}">{int(round(num_v)):,}</span>'
-                    cell_attr = row_bg_attr
-
-                    if i == 76 and k in ["前々期", "前期", "今期"]:
-                        v = _to_float_for_highlight(row.get(k))
-                        if v != 0:
-                            if cell_attr:
-                                cell_attr = cell_attr[:-1] + "; background-color:#ffff00\""
-                            else:
-                                cell_attr = ' style="background-color:#ffff00"'
-
-                    h += f'<td class="{c_cls}"{cell_attr}>{disp}</td>'
-
+                    h += f'<td class="{c_cls}"{row_bg_attr}>{disp}</td>'
                     continue
                 if k in ["前期増減額", "今期増減額"]:
                     try:
@@ -1485,18 +1465,7 @@ def render_rows(start, end, left_layout=None):
                     except:
                         num_v = 0.0
                     disp = f'<span id="calc-r159-{k}">{int(round(num_v)):,}</span>'
-                    cell_attr = row_bg_attr
-
-                    if i == 76 and k in ["前々期", "前期", "今期"]:
-                        v = _to_float_for_highlight(row.get(k))
-                        if v != 0:
-                            if cell_attr:
-                                cell_attr = cell_attr[:-1] + "; background-color:#ffff00\""
-                            else:
-                                cell_attr = ' style="background-color:#ffff00"'
-
-                    h += f'<td class="{c_cls}"{cell_attr}>{disp}</td>'
-
+                    h += f'<td class="{c_cls}"{row_bg_attr}>{disp}</td>'
                     continue
                 if k in ["前期前年比増加率", "今期前年比増加率"]:
                     try:
@@ -1504,18 +1473,7 @@ def render_rows(start, end, left_layout=None):
                     except:
                         num_v = 0.0
                     disp = f'<span id="calc-r159-{k}">{int(round(num_v))}%</span>'
-                    cell_attr = row_bg_attr
-
-                    if i == 76 and k in ["前々期", "前期", "今期"]:
-                        v = _to_float_for_highlight(row.get(k))
-                        if v != 0:
-                            if cell_attr:
-                                cell_attr = cell_attr[:-1] + "; background-color:#ffff00\""
-                            else:
-                                cell_attr = ' style="background-color:#ffff00"'
-
-                    h += f'<td class="{c_cls}"{cell_attr}>{disp}</td>'
-
+                    h += f'<td class="{c_cls}"{row_bg_attr}>{disp}</td>'
                     continue
 
             if v in ['""', '\"\"']:
@@ -1527,24 +1485,12 @@ def render_rows(start, end, left_layout=None):
                 except:
                     disp = v
 
-            cell_attr = row_bg_attr
-
-            if i == 76 and k in ["前々期", "前期", "今期"]:
-                v = _to_float_for_highlight(row.get(k))
-                if v != 0:
-                    if cell_attr:
-                        cell_attr = cell_attr[:-1] + "; background-color:#ffff00\""
-                    else:
-                        cell_attr = ' style="background-color:#ffff00"'
-
-            h += f'<td class="{c_cls}"{cell_attr}>{disp}</td>'
-
+            h += f'<td class="{c_cls}"{row_bg_attr}>{disp}</td>'
 
         memo = row.get("集計方法", "")
         if memo in ['""', '\"\"']:
             memo = ""
-        h += f'<td class="col-memo"{row_bg_attr}>{memo}</td>'
-
+        h += f'<td class="col-memo"{row_bg_attr}>{memo}</td></tr>'
 
     return h
 
@@ -1716,10 +1662,10 @@ json_output = add_precise_cell_references_to_data(json_output)
 
 with open(OUTPUT_PATH, 'w', encoding='utf-8') as f:
     json.dump(json_output, f, ensure_ascii=False, indent=2)
+
 if NO_HTML:
     # HTML生成は不要なのでここで終了（output_updated.json は作成済み）
     raise SystemExit(0)
-
 
 # ------------------------------------------------------------------
 # 7. JS側に渡すデータは JSON直書きせず、application/json に埋め込む（構文エラー回避）
@@ -2241,12 +2187,14 @@ action_buttons_vertical = (
     f'</div>'
 )
 
-
 # ------------------------------------------------------------------
 # 9. 表示（デバッグログはコメントアウトで非表示）
+#   - サーバー実行でも使えるように、HTMLをファイル出力する
+#   - Notebook(Colab) のときだけ display も行う
 # ------------------------------------------------------------------
-if (not NO_HTML) and display and HTML:
-    display(HTML(
+from pathlib import Path
+
+html_out = (
     style + data_tag + script + modal_html +
     # ===== 上部：縦2ボタン =====
     action_buttons_vertical +
@@ -2256,36 +2204,19 @@ if (not NO_HTML) and display and HTML:
     f'</div>'
     # ===== 下部：縦2ボタン =====
     + action_buttons_vertical
-))
-# from IPython.display import HTML, display
-# import html as _html
-# # ★ Colab上の表示は iframe に隔離（Colabの script 差し替え/eval を回避）
-# _srcdoc = _html.escape(full_html, quote=True)
+)
 
-# # 高さは必要に応じて調整してください（例：900px）
-# display(HTML(
-#     f'<iframe srcdoc="{_srcdoc}" '
-#     f'style="width:100%; height:900px; border:0; background:white;"></iframe>'
-# ))
+# ★ ここが重要：必ずHTMLファイルに書き出す
+# runner 側が cwd を /tmp/... にして実行するので、相対パスでOK
+html_path = Path(os.getenv("HTML_OUTPUT_PATH", "report.html"))
+html_path.write_text(html_out, encoding="utf-8")
 
-
-
-# ------------------------------------------------------------------
-# 10. Cloud Run 向け：HTMLをファイルに書き出し（S3アップロード用）
-# ------------------------------------------------------------------
-if not NO_HTML:
+# Notebook/Colab のときだけ表示（サーバーでは display が無いので try）
+if os.getenv("NO_HTML", "0") != "1":
     try:
-        # display 用に組み立てたのと同じHTMLを保存する
-        html_out = (
-            style + data_tag + script + modal_html +
-            action_buttons_vertical +
-            f'<div id="report-container" class="show-all">'
-            f'{_spec_warning_html}{full_html}'
-            f'</div>'
-            + action_buttons_vertical
-        )
-        with open(HTML_OUTPUT_PATH, "w", encoding="utf-8") as f:
-            f.write(html_out)
-    except Exception as _e:
-        # HTML保存失敗でも JSON は生成済みなので落とさない（必要ならログ出力に変更）
+        from IPython.display import HTML, display
+        display(HTML(html_out))
+    except Exception:
+        # サーバー実行時など（display不可）は無視
         pass
+

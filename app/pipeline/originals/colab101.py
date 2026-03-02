@@ -1740,7 +1740,7 @@ def render_rows(start, end, left_layout=None):
                         num_v = float(v) if v not in ['""', '\"\"', None, ""] else 0.0
                     except:
                         num_v = 0.0
-                    disp = f'<span id="calc-r159-{k}">{int(round(num_v))}%</span>'
+                    disp = f'<span id="calc-r159-{k}">{num_v:.2f}%</span>'
                     h += f'<td class="{c_cls}">{disp}</td>'
                     continue
 
@@ -1765,7 +1765,7 @@ def render_rows(start, end, left_layout=None):
                     num_v = float(v) if v not in ['""', '\"\"', None, ""] else 0.0
                 except:
                     num_v = 0.0
-                disp = f"{int(round(num_v))}%"
+                disp = f"{num_v:.2f}%"
                 h += f'<td class="{c_cls}">{disp}</td>'
                 continue
 
@@ -2194,6 +2194,14 @@ function _fmt(n){
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+function _fmtPct(n){
+  if(n === null || n === undefined) n = 0;
+  n = Number(n);
+  if(!isFinite(n)) n = 0;
+  if(Math.abs(n) < 0.0005) n = 0;
+  return n.toFixed(2) + "%";
+}
+
 /* ------------------------------
  * 決算期（第何期）ヘッダー編集
  *  - どのブロックで編集しても全ブロック同期
@@ -2365,11 +2373,11 @@ function _recalc159(){
     sp = _gi("calc-r159-前期増減額"); if(sp) sp.textContent = _fmt(d1);
     sp = _gi("calc-r159-今期増減額"); if(sp) sp.textContent = _fmt(d2);
 
-    var r1 = (vv !== 0) ? Math.round((vp / vv - 1) * 100) : 0;
-    var r2 = (vp !== 0) ? Math.round((vc / vp - 1) * 100) : 0;
+    var r1 = (vv !== 0) ? ((vp / vv - 1) * 100) : 0;
+    var r2 = (vp !== 0) ? ((vc / vp - 1) * 100) : 0;
 
-    sp = _gi("calc-r159-前期前年比増加率"); if(sp) sp.textContent = String(r1) + "%";
-    sp = _gi("calc-r159-今期前年比増加率"); if(sp) sp.textContent = String(r2) + "%";
+    sp = _gi("calc-r159-前期前年比増加率"); if(sp) sp.textContent = _fmtPct(r1);
+    sp = _gi("calc-r159-今期前年比増加率"); if(sp) sp.textContent = _fmtPct(r2);
 
     /* reportData 側も同期 */
     if(window.reportData){

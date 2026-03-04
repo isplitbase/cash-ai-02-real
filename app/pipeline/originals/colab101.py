@@ -1,20 +1,9 @@
-# -*- coding: utf-8 -*-
-"""TCF_create_html_v2 (cash-ai)
-
-colab101.20260228.py を Cloud Run でも runner101.py から実行できるように
-I/O（output_updated.json / report.html）を colab101.py と互換にした版。
-
-- NO_HTML=1 なら HTML生成/表示/保存をしない（デフォルト）
-- NO_HTML=0 なら report.html を HTML_OUTPUT_PATH に保存する（runner が使用）
-- DISABLE_EXCEL=1 なら Excel 転記をしない（デフォルト）
-"""
 
 #create_html
 #
 
 import json
 import os
-
 # Cloud Run では HTML 生成が不要なのでデフォルトで無効
 NO_HTML = os.getenv("NO_HTML", "1") == "1"
 # Excel 出力は不要（要求によりデフォルト無効）
@@ -90,7 +79,6 @@ def add_precise_cell_references_to_data(data):
 #    ※保存前に「シート名」「セル」を付与して output_updated.json を上書き
 # ------------------------------------------------------------------
 def _save_output_updated_json(payload):
-    print("★★★ SAVE FUNCTION CALLED ★★★")
     """
     payload は JS から渡される dict を想定:
       {
@@ -114,106 +102,27 @@ def _save_output_updated_json(payload):
             if "行番号" not in item:
                 return {"ok": False, "error": f"Item {i} missing 行番号."}
 
-        print(any(r.get("行番号") == 160 for r in data))
+        # 保存前に精密セル情報を付与
+        data = add_precise_cell_references_to_data(data)
 
         abs_path = os.path.abspath(OUTPUT_PATH)
-        tmp_path = abs_path + f".tmp.{os.getpid()}"
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with open(abs_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, abs_path)
+            f.flush()
+            os.fsync(f.fileno())
 
         exists = os.path.exists(abs_path)
         size = os.path.getsize(abs_path) if exists else -1
 
         # -----------------------------
-        # Excel へ転記（決算年月日: E4/G4/J4, 第何期: E5/G5/J5）
+        # Excel へ転記（Cloud Runでは不要のためデフォルト無効）
+        # -----------------------------
+
+        # -----------------------------
+        # Excel へ転記（Cloud Runでは不要のため無効化）
         # -----------------------------
         excel_updated = False
-        excel_error = ""
-
-        # Cloud Run 等の並列実行時に共有ファイル(EXCEL_PATH)を書き換えないため、デフォルトで無効
-        if DISABLE_EXCEL:
-            return {
-                "ok": True,
-                "path": abs_path,
-                "exists": exists,
-                "size": size,
-                "excel_updated": False,
-                "excel_error": None
-            }
-
-        try:
-            period_numbers = payload.get("period_numbers", {}) or {}
-            if not isinstance(period_numbers, dict):
-                raise ValueError("payload['period_numbers'] must be a dict.")
-
-            # 期数：1以上の整数のみ許可（"11" / "11期" / "第11期" などは数字抽出で許容）
-            cleaned = {}
-            import re as _re
-            for k in ["前々期", "前期", "今期"]:
-                v = period_numbers.get(k, None)
-                if v is None or v == "":
-                    continue
-                if isinstance(v, bool):
-                    raise ValueError(f"{k} must be a positive integer.")
-
-                if isinstance(v, (int, float)):
-                    iv = int(v)
-                    if float(v) != float(iv):
-                        raise ValueError(f"{k} must be an integer.")
-                    if iv < 1:
-                        raise ValueError(f"{k} must be >= 1.")
-                    cleaned[k] = iv
-                    continue
-
-                s = str(v).strip()
-                digits = "".join(_re.findall(r"\d+", s))
-                if digits == "":
-                    raise ValueError(f"{k} must be a positive integer.")
-                iv = int(digits)
-                if iv < 1:
-                    raise ValueError(f"{k} must be >= 1.")
-                cleaned[k] = iv
-
-            # 決算年月日（output.json から読んだ closing_dates を転記）
-            dates = {
-                "前々期": closing_dates.get("前々期", "") or "",
-                "前期": closing_dates.get("前期", "") or "",
-                "今期": closing_dates.get("今期", "") or "",
-            }
-
-            # Excel 転記
-            try:
-                from openpyxl import load_workbook
-            except Exception as e:
-                raise RuntimeError("openpyxl is required to write Excel.") from e
-
-            if not os.path.exists(EXCEL_PATH):
-                raise FileNotFoundError(f"Excel file not found: {EXCEL_PATH}")
-
-            wb = load_workbook(EXCEL_PATH)
-            if EXCEL_SHEET_NAME not in wb.sheetnames:
-                raise KeyError(f"Sheet not found: {EXCEL_SHEET_NAME}")
-
-            ws = wb[EXCEL_SHEET_NAME]
-
-            for k, (cell_date, cell_period) in EXCEL_PERIOD_CELLS.items():
-                # 決算年月日（常に転記）
-                ws[cell_date].value = dates.get(k, "")
-
-                # 第何期（入力がある場合は「●●期」、未入力なら「前々期/前期/今期」のまま転記）
-                ws[cell_period].number_format = "@"
-                if k in cleaned:
-                    ws[cell_period].value = f"{cleaned[k]}期"
-                else:
-                    ws[cell_period].value = k
-
-            wb.save(EXCEL_PATH)
-            excel_updated = True
-
-        except Exception as e:
-            excel_updated = False
-            excel_error = str(e)
+        excel_error = "DISABLE_EXCEL" if DISABLE_EXCEL else ""
 
         return {
             "ok": True,
@@ -2098,11 +2007,8 @@ full_html = (
     create_table(160, 164, "集計項目")
 )
 
-abs_out_path = os.path.abspath(OUTPUT_PATH)
-_tmp_out_path = abs_out_path + f".tmp.{os.getpid()}"
-with open(_tmp_out_path, 'w', encoding='utf-8') as f:
+with open(OUTPUT_PATH, 'w', encoding='utf-8') as f:
     json.dump(json_output, f, ensure_ascii=False, indent=2)
-os.replace(_tmp_out_path, abs_out_path)
 
 # ------------------------------------------------------------------
 # 7. JS側に渡すデータは JSON直書きせず、application/json に埋め込む（構文エラー回避）
@@ -2722,15 +2628,15 @@ action_buttons_vertical = (
 # ------------------------------------------------------------------
 if (not NO_HTML) and display and HTML:
     display(HTML(
-        style + data_tag + script + modal_html +
-        # ===== 上部：縦2ボタン =====
-        action_buttons_vertical +
-        f'<div id="report-container" class="show-all">'
-        f'{_spec_warning_html}{full_html}'
-        # f'{debug_panel}'  # ← デバッグログを復活する場合はこの行のコメントを外す
-        f'</div>'
-        # ===== 下部：縦2ボタン =====
-        + action_buttons_vertical
+    style + data_tag + script + modal_html +
+    # ===== 上部：縦2ボタン =====
+    action_buttons_vertical +
+    f'<div id="report-container" class="show-all">'
+    f'{_spec_warning_html}{full_html}'
+    # f'{debug_panel}'  # ← デバッグログを復活する場合はこの行のコメントを外す
+    f'</div>'
+    # ===== 下部：縦2ボタン =====
+    + action_buttons_vertical
     ))
 # from IPython.display import HTML, display
 # import html as _html
@@ -2744,13 +2650,11 @@ if (not NO_HTML) and display and HTML:
 # ))
 
 
-
 # ------------------------------------------------------------------
-# 10. Cloud Run 向け：HTMLをファイルに書き出し（S3アップロード用）
+# HTML をファイルに保存（Cloud Run でS3アップロードするため）
 # ------------------------------------------------------------------
 if not NO_HTML:
     try:
-        # display 用に組み立てたのと同じHTMLを保存する
         html_out = (
             style + data_tag + script + modal_html +
             action_buttons_vertical +
@@ -2761,6 +2665,6 @@ if not NO_HTML:
         )
         with open(HTML_OUTPUT_PATH, "w", encoding="utf-8") as f:
             f.write(html_out)
-    except Exception as _e:
+    except Exception:
         # HTML保存失敗でも JSON は生成済みなので落とさない
         pass

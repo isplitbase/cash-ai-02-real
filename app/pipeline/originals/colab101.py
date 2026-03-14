@@ -664,11 +664,11 @@ style = """
 
     .excel-table th { background-color: #f2f2f2; text-align: center; font-weight: bold; }
 
-    .w-v { width: 28px !important; }
-    .w-subject { width: 300px !important; }
+    .w-v { width: 24px !important; }
+    .w-subject { width: 220px !important; white-space: normal !important; }
 
-    .excel-table col.c-amt { width: 180px !important; }
-    th.col-amt, td.col-amt { width: 180px !important; text-align: right !important; font-family: "Consolas", monospace; }
+    .excel-table col.c-amt { width: 120px !important; }
+    th.col-amt, td.col-amt { width: 120px !important; text-align: right !important; font-family: "Consolas", monospace; }
     th.col-amt { text-align: center !important; }
 
 /* clickable period header */
@@ -677,17 +677,17 @@ th.clickable-period:hover{background:#e8f0ff;}
 th.clickable-period:focus{outline:2px solid #4d90fe;outline-offset:-2px;}
 
     .excel-table col.c-pct { display: none !important; width: 0px !important; }
-    .col-pct { display: none !important; width: 60px !important; text-align: center !important; font-size: 11px; color: #666; }
+    .col-pct { display: none !important; width: 48px !important; text-align: center !important; font-size: 11px; color: #666; }
 
     .excel-table col.c-diff { display: none !important; width: 0px !important; }
-    .col-diff, .diff-group { display: none !important; width: 180px !important; text-align: right !important; font-family: "Consolas", monospace; }
+    .col-diff, .diff-group { display: none !important; width: 110px !important; text-align: right !important; font-family: "Consolas", monospace; }
     th.col-diff, th.diff-group { text-align: center !important; }
 
-    .excel-table col.c-memo { width: 300px !important; }
-    td.col-memo { width: 300px !important; text-align: left !important; white-space: normal !important; }
+    .excel-table col.c-memo { width: 200px !important; }
+    td.col-memo { width: 200px !important; text-align: left !important; white-space: normal !important; }
 
-    .show-all .excel-table col.c-pct { display: table-column !important; width: 60px !important; }
-    .show-all .excel-table col.c-diff { display: table-column !important; width: 180px !important; }
+    .show-all .excel-table col.c-pct { display: table-column !important; width: 48px !important; }
+    .show-all .excel-table col.c-diff { display: table-column !important; width: 110px !important; }
     .show-all .col-pct, .show-all .col-diff, .show-all .diff-group { display: table-cell !important; }
 
     .btn-container { position: sticky; top: 0; background: white; z-index: 100; padding: 10px 0; display: flex; gap: 10px; border-bottom: 1px solid #ddd; }
@@ -1890,6 +1890,8 @@ def _acc_wrap(title, table_html, collapsed=False):
     )
 
 def create_table(start, end, title):
+    import re as _re2
+    acc_id = _re2.sub(r'[^\w]', '_', title)
     left_layout = _build_left_layout_for_range(start, end)
     table_html = (
         f'<table class="excel-table">'
@@ -1905,11 +1907,43 @@ def create_table(start, end, title):
         f'<tbody>{render_rows(start, end, left_layout)}</tbody>'
         f'</table>'
     )
-    return _acc_wrap(title, table_html, collapsed=True)
+    fs_bar = (
+        f'<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;'
+        f'background:#f8f9fa;border:1px solid #dee2e6;border-bottom:none;'
+        f'border-radius:4px 4px 0 0;font-family:Meiryo,sans-serif;font-size:12px;'
+        f'color:#333;">'
+        f'<span style="font-weight:bold;">フォントサイズ:</span>'
+        f'<button onclick="changeFontSize(\'{acc_id}\', -1)" '
+        f'style="display:inline-flex;align-items:center;justify-content:center;'
+        f'min-width:32px;height:26px;padding:0 8px;border:1px solid #adb5bd;'
+        f'border-radius:4px;background:#fff;color:#333;font-size:14px;'
+        f'font-weight:600;cursor:pointer;">A-</button>'
+        f'<span id="fs-val-{acc_id}" style="font-family:Consolas,monospace;'
+        f'min-width:40px;text-align:center;">13px</span>'
+        f'<button onclick="changeFontSize(\'{acc_id}\', +1)" '
+        f'style="display:inline-flex;align-items:center;justify-content:center;'
+        f'min-width:32px;height:26px;padding:0 8px;border:1px solid #adb5bd;'
+        f'border-radius:4px;background:#fff;color:#333;font-size:14px;'
+        f'font-weight:600;cursor:pointer;">A+</button>'
+        f'<button onclick="resetFontSize(\'{acc_id}\')" '
+        f'style="display:inline-flex;align-items:center;justify-content:center;'
+        f'height:26px;padding:0 10px;border:1px solid #adb5bd;'
+        f'border-radius:4px;background:#fff;color:#333;font-size:11px;'
+        f'cursor:pointer;">リセット</button>'
+        f'</div>'
+    )
+    wrapped_html = (
+        f'<div id="fs-block-{acc_id}" style="overflow-x:auto;">'
+        f'{fs_bar}'
+        f'{table_html}'
+        f'</div>'
+    )
+    return _acc_wrap(title, wrapped_html, collapsed=True)
 
 def create_table_rows(row_ranges, title):
     """row_ranges: [(start1,end1),(start2,end2),...] の形式で複数範囲を1テーブルに合成"""
-    # 全範囲の最小・最大を使ってleft_layoutを構築
+    import re as _re2
+    acc_id = _re2.sub(r'[^\w]', '_', title)
     all_start = min(r[0] for r in row_ranges)
     all_end   = max(r[1] for r in row_ranges)
     left_layout = _build_left_layout_for_range(all_start, all_end)
@@ -1932,7 +1966,38 @@ def create_table_rows(row_ranges, title):
         f'<tbody>{tbody}</tbody>'
         f'</table>'
     )
-    return _acc_wrap(title, table_html, collapsed=True)
+    fs_bar = (
+        f'<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;'
+        f'background:#f8f9fa;border:1px solid #dee2e6;border-bottom:none;'
+        f'border-radius:4px 4px 0 0;font-family:Meiryo,sans-serif;font-size:12px;'
+        f'color:#333;">'
+        f'<span style="font-weight:bold;">フォントサイズ:</span>'
+        f'<button onclick="changeFontSize(\'{acc_id}\', -1)" '
+        f'style="display:inline-flex;align-items:center;justify-content:center;'
+        f'min-width:32px;height:26px;padding:0 8px;border:1px solid #adb5bd;'
+        f'border-radius:4px;background:#fff;color:#333;font-size:14px;'
+        f'font-weight:600;cursor:pointer;">A-</button>'
+        f'<span id="fs-val-{acc_id}" style="font-family:Consolas,monospace;'
+        f'min-width:40px;text-align:center;">13px</span>'
+        f'<button onclick="changeFontSize(\'{acc_id}\', +1)" '
+        f'style="display:inline-flex;align-items:center;justify-content:center;'
+        f'min-width:32px;height:26px;padding:0 8px;border:1px solid #adb5bd;'
+        f'border-radius:4px;background:#fff;color:#333;font-size:14px;'
+        f'font-weight:600;cursor:pointer;">A+</button>'
+        f'<button onclick="resetFontSize(\'{acc_id}\')" '
+        f'style="display:inline-flex;align-items:center;justify-content:center;'
+        f'height:26px;padding:0 10px;border:1px solid #adb5bd;'
+        f'border-radius:4px;background:#fff;color:#333;font-size:11px;'
+        f'cursor:pointer;">リセット</button>'
+        f'</div>'
+    )
+    wrapped_html = (
+        f'<div id="fs-block-{acc_id}" style="overflow-x:auto;">'
+        f'{fs_bar}'
+        f'{table_html}'
+        f'</div>'
+    )
+    return _acc_wrap(title, wrapped_html, collapsed=True)
 
 # 155-159 と 160-164 を別テーブルに分離（要件）
 
@@ -2184,6 +2249,50 @@ script = r"""
 /* ------------------------------
  * アコーディオン開閉
  * ------------------------------ */
+/* ------------------------------
+ * フォントサイズ変更（B/S, 製造原価, P/L用）
+ * ------------------------------ */
+var _fsDefaults = {};
+
+function changeFontSize(accId, delta) {
+  var block = document.getElementById('fs-block-' + accId);
+  if (!block) return;
+  var table = block.querySelector('.excel-table');
+  if (!table) return;
+  if (!_fsDefaults[accId]) {
+    var cs = window.getComputedStyle(table);
+    _fsDefaults[accId] = parseInt(cs.fontSize, 10) || 13;
+  }
+  var current = parseInt(table.style.fontSize, 10);
+  if (isNaN(current)) current = _fsDefaults[accId];
+  var newSize = current + delta;
+  if (newSize < 8) newSize = 8;
+  if (newSize > 24) newSize = 24;
+  table.style.fontSize = newSize + 'px';
+  var cells = table.querySelectorAll('th, td');
+  for (var i = 0; i < cells.length; i++) {
+    if (!cells[i].classList.contains('kubun-cell')) {
+      cells[i].style.fontSize = newSize + 'px';
+    }
+  }
+  var valEl = document.getElementById('fs-val-' + accId);
+  if (valEl) valEl.textContent = newSize + 'px';
+}
+
+function resetFontSize(accId) {
+  var block = document.getElementById('fs-block-' + accId);
+  if (!block) return;
+  var table = block.querySelector('.excel-table');
+  if (!table) return;
+  var defSize = _fsDefaults[accId] || 13;
+  table.style.fontSize = '';
+  var cells = table.querySelectorAll('th, td');
+  for (var i = 0; i < cells.length; i++) {
+    cells[i].style.fontSize = '';
+  }
+  var valEl = document.getElementById('fs-val-' + accId);
+  if (valEl) valEl.textContent = defSize + 'px';
+}
 function accToggle(id) {
   var body = document.getElementById('acc-' + id);
   var btn  = body ? body.previousElementSibling : null;

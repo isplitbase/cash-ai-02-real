@@ -183,11 +183,16 @@ else:
     json_rows = json_data
 
 data_dict = {}
+_row33_subs = {}  # 33.1, 33.2, 33.3, 33.4 を一時保管
 for item in (json_rows or []):
     try:
-        rn = int(item.get('行番号'))
+        _rn_raw = item.get('行番号')
+        _rn_f = float(_rn_raw)
+        if _rn_f != int(_rn_f):  # 小数 = 33.1, 33.2, 33.3, 33.4
+            _row33_subs[_rn_f] = item
+            continue
+        rn = int(_rn_f)
     except Exception:
-        # 行番号が不正な行はスキップ
         continue
     item['行番号'] = rn
     data_dict[rn] = item
@@ -224,6 +229,48 @@ mapping = {
 for k, v in mapping.items():
     if k in data_dict:
         data_dict[k]["勘定科目"] = v
+
+# ── 無形固定資産サブスロット（3行展開用）
+if 33 not in data_dict:
+    data_dict[33] = {"行番号": 33, "勘定科目": "無形固定資産"}
+_r33 = data_dict[33]
+if "_sub_slots" not in _r33:
+    _r33["_sub_slots"] = [
+        {"勘定科目": "", "前々期": 0, "前期": 0, "今期": 0},
+        {"勘定科目": "", "前々期": 0, "前期": 0, "今期": 0},
+        {"勘定科目": "", "前々期": 0, "前期": 0, "今期": 0},
+    ]
+
+# ── output.json の 33.1〜33.4 を _sub_slots / 行33本体に反映
+if _row33_subs:
+    for _si, _sk in enumerate([33.1, 33.2, 33.3]):
+        if _sk in _row33_subs:
+            _sd = _row33_subs[_sk]
+            _slot = {
+                '勘定科目': _sd.get('勘定科目', ''),
+                '前々期': _sd.get('前々期', 0),
+                '前期': _sd.get('前期', 0),
+                '今期': _sd.get('今期', 0),
+                '集計方法': _sd.get('集計方法', ''),
+            }
+            _denom_row = data_dict.get(45, {})
+            for _pk in ['前々期', '前期', '今期']:
+                _v = float(_slot.get(_pk, 0) or 0)
+                _total = float(_denom_row.get(_pk, 0) or 0)
+                _slot[f'{_pk}構成比'] = round(_v / _total * 100, 2) if _total else 0.0
+            _vv = float(_slot.get('前々期', 0) or 0)
+            _vp = float(_slot.get('前期', 0) or 0)
+            _vc = float(_slot.get('今期', 0) or 0)
+            _slot['前期前年比増加率'] = int(round((_vp / _vv - 1) * 100)) if _vv else 0
+            _slot['今期前年比増加率'] = int(round((_vc / _vp - 1) * 100)) if _vp else 0
+            _slot['前期増減額'] = int(_vp - _vv)
+            _slot['今期増減額'] = int(_vc - _vp)
+            _r33['_sub_slots'][_si] = _slot
+    if 33.4 in _row33_subs:
+        _sd4 = _row33_subs[33.4]
+        for _pk in ['前々期', '前期', '今期']:
+            _r33[_pk] = _sd4.get(_pk, _r33.get(_pk, 0))
+        _r33['集計方法'] = _sd4.get('集計方法', _r33.get('集計方法', ''))
 
 # ------------------------------------------------------------------
 # 2. 計算用ヘルパー関数
@@ -545,8 +592,8 @@ def recalc_all_component_ratios():
 
 recalc_all_component_ratios()
 
-print("79 前期構成比:", data_dict[79]["前期構成比"])
-print("45 前期:", data_dict[45]["前期"])
+# print("79 前期構成比:", data_dict[79]["前期構成比"])
+# print("45 前期:", data_dict[45]["前期"])
 # 実行
 
 
@@ -1095,7 +1142,6 @@ SPEC_TEXT_EMBEDDED = r'''■全体レイアウト
 ([22,23],[3,4],小計,h,3,左線なし)
 ([24,33],[2,3],有形固定資産,v,3)
 ([32,33],[3,4],小計,h,3,左線なし)
-([33,34],[2,4],無形固定資産,h,3)
 ([34,43],[2,3],投資等,v,3)
 ([42,43],[3,4],小計,h,3,左線なし)
 ([43,44],[2,4],繰延資産,h,3)
@@ -1474,8 +1520,73 @@ def render_rows(start, end, left_layout=None):
 
     h = ""
 
+    # ── 無形固定資産（行33）サブ展開ヘルパー
+    def _expand_row33_html():
+        r33 = data_dict.get(33, {})
+        slots = r33.get('_sub_slots', [])
+        if not slots:
+            return ''
+        out = ''
+        n_slots = len(slots)
+        for si, slot in enumerate(slots):
+            out += f'<tr data-row="33" style="background-color:#ffffff;">'
+            if si == 0:
+                out += f'<td class="w-v" rowspan="{n_slots + 1}" style="background-color:#EBF5FB; color:#333333; writing-mode:vertical-rl; text-orientation:upright; text-align:center; vertical-align:middle; font-weight:bold;">無形固定資産</td>'
+            subj = slot.get('勘定科目', '')
+            out += f'<td class="w-subject" style="font-weight:normal; text-align:left; padding-left:8px;">{subj}</td>'
+            for k in ['前々期','前々期構成比','前期','前期構成比','前期前年比増加率',
+                       '今期','今期構成比','今期前年比増加率','前期増減額','今期増減額']:
+                v = slot.get(k, 0)
+                try:
+                    num_v = float(v) if v not in ['""', None, ''] else 0.0
+                except:
+                    num_v = 0.0
+                if '構成比' in k:
+                    out += f'<td class="col-pct">{num_v:.2f}%</td>'
+                elif '増加率' in k:
+                    out += f'<td class="col-pct">{int(round(num_v))}%</td>'
+                elif '増減' in k:
+                    out += f'<td class="col-diff">{int(round(num_v)):,}</td>'
+                else:
+                    out += f'<td class="col-amt">{int(round(num_v)):,}</td>'
+            _memo_s = str(slot.get('集計方法', '') or '')
+            if _memo_s in ('""', '""'):
+                _memo_s = ''
+            out += f'<td class="col-memo">{_memo_s}</td></tr>\n'
+        out += '<tr data-row="33" style="background-color:#EBF5FB; color:#333333; font-weight:bold;">'
+        out += '<td class="w-subject" style="background-color:#EBF5FB; color:#333333; text-align:left; padding-left:8px; border-left-color:#EBF5FB !important; font-weight:bold;">小計</td>'
+        for k in ['前々期','前々期構成比','前期','前期構成比','前期前年比増加率',
+                   '今期','今期構成比','今期前年比増加率','前期増減額','今期増減額']:
+            v = r33.get(k, 0)
+            try:
+                num_v = float(v) if v not in ['""', None, ''] else 0.0
+            except:
+                num_v = 0.0
+            if '構成比' in k:
+                out += f'<td class="col-pct">{num_v:.2f}%</td>'
+            elif '増加率' in k:
+                out += f'<td class="col-pct">{int(round(num_v))}%</td>'
+            elif '増減' in k:
+                out += f'<td class="col-diff">{int(round(num_v)):,}</td>'
+            else:
+                out += f'<td class="col-amt">{int(round(num_v)):,}</td>'
+        memo = str(r33.get('集計方法', '') or '')
+        if memo in ('""', '""'):
+            memo = ''
+        if memo.startswith('Python'):
+            memo = memo[6:]
+        out += f'<td class="col-memo">{memo}</td></tr>\n'
+        return out
+
+
     for i in range(start, end + 1):
         row = data_dict.get(i)
+
+        # ── 行33は無形固定資産サブ展開で処理
+        if i == 33:
+            h += _expand_row33_html()
+            continue
+
         if not row:
             continue
 
@@ -1557,6 +1668,8 @@ def render_rows(start, end, left_layout=None):
 
                 d = info.get("def", {}) or {}
                 rs = int(info.get("r1", 0)) - int(info.get("r0", 0))
+                if int(info.get("r0", 0)) <= 33 < int(info.get("r1", 0)):
+                    rs += 3
                 cs = int(info.get("c1", 0)) - int(info.get("c0", 0))
                 text = d.get("text", "") or ""
                 if text == "{区分}" or text == "｛区分｝":
@@ -2026,8 +2139,8 @@ except Exception:
 debug_panel = f'<div class="debug-panel"><h3>【詳細デバッグログ】</h3>{"".join(debug_logs)}</div>'
 
 save_panel = (
-    '<div class="save-panel">'
-    '<button class="btn-excel" onclick="window._downloadExcel()">エクセルダウンロード</button>'
+    '<div class="save-panel">'\
+    '<button class="btn-excel" onclick="window._downloadExcel()">エクセルダウンロード</button>'\
     '</div>'
 )
 # ==========================================================
@@ -3386,11 +3499,14 @@ window._rebuildKeiei = function() {
       equity_ratio:   safePct(equity, assets),
       debt_payback:   safeDiv(borrow, net + dep),
       asset_turnover: safeDiv(sales,  assets),
-      roa:            safePct(ord_p,  assets)
+      roa:            safePct(ord_p,  assets),
+      roa_net:        safePct(net, assets),
+      roe:            safePct(net, equity)
     };
     var idxUnits = {
       gross_margin:"％", op_margin:"％", ord_margin:"％",
-      equity_ratio:"％", debt_payback:"年", asset_turnover:"回", roa:"％"
+      equity_ratio:"％", debt_payback:"年", asset_turnover:"回", roa:"％",
+      roa_net:"％", roe:"％"
     };
     Object.keys(indices).forEach(function(key) {
       var el = document.querySelector('[data-keiei-key="idx-' + key + '-' + pk + '"]');
@@ -3426,7 +3542,7 @@ window._rebuildKeiei = function() {
 action_buttons_vertical = (
     f'<div class="btn-container vertical">'
     f'<button class="btn" onclick="toggleCols()">表示切替</button>'
-    f'<button class="btn btn-excel" onclick="_downloadExcel()">エクセルダウンロード</button>'
+    f'<button class="btn btn-excel" onclick="window._downloadExcel()">エクセルダウンロード</button>'
     f'</div>'
 )
 
@@ -4537,74 +4653,10 @@ def _write_hendo_pl_bep_sheet(wb, data_dict, closing_dates):
 
 
 def generate_excel_report(output_path="/content/財務分析表.xlsx"):
-    # ★ data_dict に 前期増減額/今期増減額 が無い行を再計算してセット
-    PKEYS = ["前々期", "前期", "今期"]
-    for rn, row in data_dict.items():
-        try:
-            vv = float(row.get("前々期") or 0)
-            vp = float(row.get("前期")   or 0)
-            vc = float(row.get("今期")   or 0)
-        except:
-            continue
-        row["前期増減額"] = int(vp - vv)
-        row["今期増減額"] = int(vc - vp)
-        row["前期前年比増加率"] = int(round((vp / vv - 1) * 100)) if vv else 0
-        row["今期前年比増加率"] = int(round((vc / vp - 1) * 100)) if vp else 0
+    """Cloud Run API版では内部でExcelファイルを生成しない。"""
+    return None
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "財務諸表"
-
-    for ci, w in enumerate(_COL_WIDTHS, start=1):
-        ws.column_dimensions[get_column_letter(ci)].width = w
-    ws.sheet_format.defaultRowHeight = 15
-    ws.sheet_view.showGridLines = False
-
-    d_zy = closing_dates.get("前々期","")
-    d_zp = closing_dates.get("前期",  "")
-    d_zc = closing_dates.get("今期",  "")
-
-    xl_row = 1
-    for (ranges, title) in _BLOCKS:
-        all_s = min(s for s,e in ranges)
-        all_e = max(e for s,e in ranges)
-        layout = _xl_left_layout(all_s, all_e)
-
-        xl_row = _write_section_title(ws, xl_row, title)
-        xl_row = _write_header_rows(ws, xl_row, d_zy, d_zp, d_zc)
-        xl_row = _write_block_rows(ws, xl_row, ranges, layout)
-        xl_row += 1
-
-    # ── CF計算書シートを追加
-    try:
-        _cf = calc_cf_from_data_dict(data_dict, closing_dates)
-        _write_cf_sheet(wb, _cf)
-        print("✅ CF計算書シートを追加しました")
-    except Exception as _e:
-        print(f"⚠️ CF計算書シートの生成でエラー: {_e}")
-
-    # ── 経営指標シートを追加
-    try:
-        _write_keiei_sheet(wb, data_dict, closing_dates)
-        print("✅ 経営指標シートを追加しました")
-    except Exception as _e:
-        print(f"⚠️ 経営指標シートの生成でエラー: {_e}")
-
-    # ── 変動PL＆BEPシートを追加
-    try:
-        _write_hendo_pl_bep_sheet(wb, data_dict, closing_dates)
-        print("✅ 変動PL＆BEPシートを追加しました")
-    except Exception as _e:
-        print(f"⚠️ 変動PL＆BEPシートの生成でエラー: {_e}")
-
-    wb.save(output_path)
-    print(f"✅ Excelファイルを保存しました: {output_path}")
-    return output_path
-
-# 実行
-if not DISABLE_EXCEL:
-    generate_excel_report("/content/財務分析表.xlsx")
-# ---- Excel生成セル ここまで ----
+# ---- Excel生成セルは Cloud Run API版では無効 ----
 
 # デバッグ：増減額キーの確認
 _debug_rows = [r for r in list(data_dict.values()) if r.get("前期増減額") not in (None, 0, "", '""')]
@@ -4618,10 +4670,7 @@ else:
         sample = next(iter(data_dict.values()))
         print(f"  data_dictサンプルキー: {list(sample.keys())}")
 
-# 実行
-if not DISABLE_EXCEL:
-    generate_excel_report("/content/財務分析表.xlsx")
-# ---- Excel生成セル ここまで ----
+# ---- Excel生成セルは Cloud Run API版では無効 ----
 
 # ==================================================================
 # ★ CF計算書 生成（data_dict から計算）
@@ -4749,7 +4798,6 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         ('Ⅴ　期首現金及び預金残高',0,'c47','c47'),
         ('Ⅵ　期末現金及び預金残高',0,'c48','c48'),
         ('検算（貸借対照表の現金及び預金）',2,'c49','c49'),
-        ('（照合）この欄が０でＯＫ→',99,'c50','c50'),
     ]
 
     def _val(d,key):
@@ -4889,6 +4937,8 @@ def generate_keiei_shihyo_html(data_dict, closing_dates):
             debt_payback  = safe_div(borrow, net + dep),  # 債務償還年数
             asset_turnover= safe_div(sales, assets),      # 総資本回転率
             roa           = safe_pct(ord_p, assets),      # 総資本経常利益率
+            roa_net       = safe_pct(net,   assets),      # ROA（当期純利益÷総資産）
+            roe           = safe_pct(net,   equity),      # ROE（当期純利益÷自己資本）
         )
 
     indices = {pk: calc_indices(bases[pk]) for pk in pkeys}
@@ -4971,6 +5021,8 @@ def generate_keiei_shihyo_html(data_dict, closing_dates):
         ('債務償還年数',     'debt_payback',    '年'),
         ('総資本回転率',     'asset_turnover',  '回'),
         ('総資本経常利益率', 'roa',             '％'),
+        ('ROA（当期純利益 ÷ 総資産 × 100）',   'roa_net',   '％'),
+        ('ROE（当期純利益 ÷ 自己資本 × 100）',  'roe',       '％'),
     ]
     for ii, (label, key, unit) in enumerate(index_items):
         row = '<tr>'

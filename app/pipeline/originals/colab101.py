@@ -2880,14 +2880,18 @@ window._rebuildCFTable = function(){
     // ── 候補リスト（Python _ACCT に対応） ──────────────────────
     var _ACCT_JS = {
       現金: ["現金及び預金","現金・預金","現金預金","現預金","現金及び預貯金"],
-      棚卸資産: ["棚卸資産計","棚卸資産","在庫","棚卸高","棚卸資産合計"],
+      棚卸資産: ["棚卸資産計","棚卸資産","在庫","棚卸高","棚卸資産合計","棚卸資産小計"],
       その他流動資産: ["その他流動資産計","その他の流動資産計","その他流動資産",
-                      "その他の流動資産","その他流動資産合計"],
+                      "その他の流動資産","その他流動資産合計","その他流動資産小計"],
+      貸倒引当金: ["貸倒引当金","貸倒引当金（▲）","貸倒引当金(▲)","貸倒引当金▲",
+                  "貸倒引当金（△）","貸倒引当金(△)","貸倒引当金△"],
       未払法人税: ["未払法人税等","未払法人税","法人税等未払金",
                   "未払法人税・住民税及び事業税","未払税金"],
       未払消費税: ["未払消費税等","未払消費税","仮受消費税"],
+      // v27-4: 無形固定資産（「無形固定資産小計」等の集計行表記にも対応）
+      無形固定資産: ["無形固定資産合計","無形固定資産小計","無形固定資産計","無形固定資産"],
       投資その他資産: ["投資その他の資産合計","投資その他資産合計","投資等合計",
-                      "投資その他の資産","投資及びその他の資産合計"],
+                      "投資その他の資産","投資及びその他の資産合計","投資等小計","投資その他の資産小計"],
       役員借入金: ["役員長期借入金","役員借入金","関係者長期借入金",
                   "役員等長期借入金","関連当事者借入金"],
       資本剰余金: ["資本剰余金","資本準備金","その他資本剰余金","資本剰余金合計"],
@@ -3023,20 +3027,31 @@ window._rebuildCFTable = function(){
       var c14 = Math.round(-d("受取手形"));
       var c15 = Math.round(-d("売掛金"));
       var c16 = Math.round(-ff(_ACCT_JS.棚卸資産));
-      // c17: 集計行優先、なければ流動資産分類から個別科目を除いた残りを合算
-      var _c17excl = {};
-      _ACCT_JS.現金.forEach(function(n){ _c17excl[n]=1; });
-      _c17excl["受取手形"]=1; _c17excl["売掛金"]=1;
-      _ACCT_JS.棚卸資産.forEach(function(n){ _c17excl[n]=1; });
-      _ACCT_JS.有価証券.forEach(function(n){ _c17excl[n]=1; });
-      _ACCT_JS.短期貸付金.forEach(function(n){ _c17excl[n]=1; });
-      var _c17raw = dsec(_ACCT_JS.その他流動資産, ["流動資産"], _c17excl);
-      // 集計行使用時、小計に短期貸付金が含まれていれば控除
-      var _aggHitC17 = _ACCT_JS.その他流動資産.some(function(nm){ return nm in nameIdx; });
-      if (_aggHitC17 && ("短期貸付金" in nameIdx)) {
-        var _stlSec = ((nameIdx["短期貸付金"]||{})["分類"]||"").trim();
-        if (_stlSec.indexOf("流動資産") >= 0) _c17raw -= fa(_ACCT_JS.短期貸付金);
+      // c17: [残差版] 流動資産合計 − 現金 − 受手 − 売掛 − 棚卸 − 有価証券 − 短期貸付
+      //   v27-4: v25 にあった残差版を復元（v26/v27 で「明細合算版」に置き換わっていた）。
+      //   その他流動資産小計に入らない流動資産（当座資産(その他)＝有価証券の別掲等）を
+      //   取りこぼし、CF照合差の原因になっていた（ai_case 100070 で 前期 +70,675 / 今期 -58,435）。
+      //   流動資産合計を基準にすることで分類漏れも必ず吸収され、B/S との照合が構造的に保証される。
+      function _ryudoTotal(pk){
+        var cand=["流動資産合計","流動資産計","流動資産の部合計"];
+        for(var i=0;i<cand.length;i++){ if(cand[i] in nameIdx) return acctFirst(nameIdx,[cand[i]],pk); }
+        // v27-5: 合計行がなくても「流動資産」見出し行が金額を持てば合計値として使う
+        //   （入れ子小計を持つ帳票で明細合算による小計二重計上を防ぐ）
+        if("流動資産" in nameIdx){
+          var head=acctFirst(nameIdx,["流動資産"],pk);
+          if(head!==0) return head;
+        }
+        return sectionSum(_data,["流動資産"],pk,{});
       }
+      function _c17other(pk){
+        return _ryudoTotal(pk)
+          - acctFirst(nameIdx,_ACCT_JS.現金,pk)
+          - vn("受取手形",pk) - vn("売掛金",pk)
+          - acctFirst(nameIdx,_ACCT_JS.棚卸資産,pk)
+          - acctSum(nameIdx,_ACCT_JS.有価証券,pk)
+          - acctSum(nameIdx,_ACCT_JS.短期貸付金,pk);
+      }
+      var _c17raw = _c17other(p_to) - _c17other(p_from);
       var c17 = Math.round(-_c17raw);
       var c18 = Math.round(d("支払手形"));
       var c19 = Math.round(d("買掛金"));
@@ -3105,7 +3120,7 @@ window._rebuildCFTable = function(){
       var hyt_from = _hyt(p_from);
       var c29 = Math.round(-((hyt_to - hyt_from) + c11));
       var c30 = Math.round(-d("建設仮勘定"));
-      var c31 = Math.round(-d("無形固定資産"));
+      var c31 = Math.round(-ff(_ACCT_JS.無形固定資産));  // v27-4: 「小計」表記にも対応
       var c34 = Math.round(-dsec(_ACCT_JS.投資その他資産, ["投資その他の資産"]));
       var c35 = Math.round(-d("繰延資産"));
       var c36 = c26+c27+c28+c29+c30+c31+c34+c35;
@@ -3119,17 +3134,37 @@ window._rebuildCFTable = function(){
       var c42 = Math.round(d("資本金") + ff(_ACCT_JS.資本剰余金));
       var c43 = ("自己株式" in nameIdx) ? Math.round(d("自己株式")) : 0;
 
-      // c44: 繰越利益剰余金ベース自動計算
-      var _rCandidates = [
-        "うち繰越利益剰余金","繰越利益剰余金",
-        "繰越利益剰余金・前期末残高","利益剰余金合計"
-      ];
+      // c44: 配当金＋役員賞与（利益剰余金全体ベース自動計算） ── v27-1
+      // v27 は「繰越利益剰余金」のみを基準にしていたため、準備金・積立金の取崩に伴う
+      // 現金流出を捕捉できず CF照合差が発生していた（例: ai_case 100071 で +25,000,000）。
+      // v27-1 では「利益剰余金全体」を基準にすることで、準備金・積立金の変動も含めて
+      // 配当・利益処分による現金流出を推定する。
+      // 優先度: 1) 利益剰余金合計/利益剰余金  2) 繰越利益剰余金 + 準備金・積立金
+      var _rTotalCandidates   = ["利益剰余金合計","利益剰余金"];
+      var _rPartialCandidates = ["うち繰越利益剰余金","繰越利益剰余金","繰越利益剰余金・前期末残高"];
+      var _rReserveCandidates = ["うち準備金、積立金","準備金・積立金","利益準備金"];
       var rieki_to = 0, rieki_from = 0;
-      for (var ci=0; ci<_rCandidates.length; ci++) {
-        if (_rCandidates[ci] in nameIdx) {
-          rieki_to   = vn(_rCandidates[ci], p_to);
-          rieki_from = vn(_rCandidates[ci], p_from);
-          break;
+      var _rTotalKey = null;
+      for (var _ci=0; _ci<_rTotalCandidates.length; _ci++) {
+        if (_rTotalCandidates[_ci] in nameIdx) { _rTotalKey = _rTotalCandidates[_ci]; break; }
+      }
+      if (_rTotalKey) {
+        rieki_to   = vn(_rTotalKey, p_to);
+        rieki_from = vn(_rTotalKey, p_from);
+      } else {
+        for (var _pi=0; _pi<_rPartialCandidates.length; _pi++) {
+          if (_rPartialCandidates[_pi] in nameIdx) {
+            rieki_to   += vn(_rPartialCandidates[_pi], p_to);
+            rieki_from += vn(_rPartialCandidates[_pi], p_from);
+            break;
+          }
+        }
+        for (var _si=0; _si<_rReserveCandidates.length; _si++) {
+          if (_rReserveCandidates[_si] in nameIdx) {
+            rieki_to   += vn(_rReserveCandidates[_si], p_to);
+            rieki_from += vn(_rReserveCandidates[_si], p_from);
+            break;
+          }
         }
       }
       var c44 = -Math.round(rdd(154, p_to) - (rieki_to - rieki_from));
@@ -4067,11 +4102,18 @@ _ACCT = {
     # 棚卸資産
     '棚卸資産': [
         '棚卸資産計', '棚卸資産', '在庫', '棚卸高', '棚卸資産合計',
+        '棚卸資産小計',  # v27-3: 「小計」表記の帳票に対応
     ],
     # その他流動資産
     'その他流動資産': [
         'その他流動資産計', 'その他の流動資産計', 'その他流動資産',
         'その他の流動資産', 'その他流動資産合計',
+        'その他流動資産小計',  # v27-3: 「小計」表記の帳票に対応
+    ],
+    # v27-3: 貸倒引当金（資産のマイナス評価勘定）。c17 から除外するための候補リスト
+    '貸倒引当金': [
+        '貸倒引当金', '貸倒引当金（▲）', '貸倒引当金(▲)', '貸倒引当金▲',
+        '貸倒引当金（△）', '貸倒引当金(△)', '貸倒引当金△',
     ],
     # 未払法人税等
     '未払法人税': [
@@ -4083,9 +4125,17 @@ _ACCT = {
         '未払消費税等', '未払消費税', '仮受消費税',
     ],
     # 投資その他の資産合計
+    # v27-4: 無形固定資産（「無形固定資産小計」等の集計行表記にも対応）
+    #   c31 は従来 d('無形固定資産') の完全一致だったため、帳票が「小計」表記だと
+    #   取りこぼして 0 になり CF照合差の原因になっていた
+    #   （ai_case 100071 で今期 +224,910 が発生）
+    '無形固定資産': [
+        '無形固定資産合計', '無形固定資産小計', '無形固定資産計', '無形固定資産',
+    ],
     '投資その他資産': [
         '投資その他の資産合計', '投資その他資産合計', '投資等合計',
         '投資その他の資産', '投資及びその他の資産合計',
+        '投資等小計', '投資その他の資産小計',  # v27-4: 「小計」表記にも対応
     ],
     # 役員長期借入金
     '役員借入金': [
@@ -4409,6 +4459,34 @@ def detect_unassigned_accounts(data_dict, used_names=None):
 # ==================================================================
 # 不整合自動検知・修正（validate_and_fix_data）
 # ==================================================================
+# ==================================================================
+# v27-6: 期データ欠損の判定
+#   2期分しかアップロードされていない案件では前々期が全ゼロになり、
+#   前期の期首残高が取れないため前期CFは構造的に計算できない。
+#   照合差を出すより「データ期間不足」と明示する方が親切。
+# ==================================================================
+def _is_period_data_missing(data_dict, period):
+    """指定期のB/S主要行がすべてゼロ（＝データ未取得）かを判定する。
+
+    現金・資産合計・負債合計・負債純資産合計 のいずれも 0 の場合に
+    「その期のデータが無い」とみなす。1つでも非ゼロなら False。
+    """
+    _idx = _build_name_index(data_dict)
+    _keys = ["現金・預金", "現金及び預金", "資産合計",
+             "負債合計", "負債・純資産合計", "純資産・負債合計"]
+    for _nm in _keys:
+        _rn = _idx.get(_nm)
+        if _rn is None:
+            continue
+        _v0 = data_dict.get(_rn, {}).get(period, 0)
+        try:
+            if _v0 not in (None, "", '""') and float(_v0) != 0:
+                return False
+        except Exception:
+            continue
+    return True
+
+
 def validate_and_fix_data(data_dict, closing_dates):
     """
     CF計算前にdata_dictの不整合を検知し、可能な範囲で自動修正する。
@@ -4424,6 +4502,7 @@ def validate_and_fix_data(data_dict, closing_dates):
     """
     alerts = []
     fixes  = []
+    notes  = []   # v27-6: 情報通知（警告ではない）
     PERIODS = ['前々期', '前期', '今期']
 
     name_idx = _build_name_index(data_dict)
@@ -4500,6 +4579,17 @@ def validate_and_fix_data(data_dict, closing_dates):
             ('前期', _cf_check['zenki'], '前期'),
             ('今期', _cf_check['konki'], '今期'),
         ]:
+            # v27-6: 前期CFは前々期を期首とするため、前々期データが無い案件
+            #   （2期分のみアップロード等）では構造的に計算できない。
+            #   照合差を出さず「データ期間不足」として通知する。
+            if label == '前期' and _is_period_data_missing(data_dict, '前々期'):
+                notes.append(
+                    '[データ期間不足][前期] 前々期のB/Sデータが無いため、'
+                    '前期キャッシュ・フローは計算できません'
+                    '（前期の期首残高が取得できないため）。'
+                    '前期CFが必要な場合は前々期の決算書もアップロードしてください。'
+                )
+                continue
             c50 = cf_dict.get('c50', 0)
             c48 = cf_dict.get('c48', 0)
             c49 = cf_dict.get('c49', 0)
@@ -4524,12 +4614,12 @@ def validate_and_fix_data(data_dict, closing_dates):
     except Exception as _e:
         alerts.append(f'[CF検証エラー] {_e}')
 
-    return alerts, fixes
+    return alerts, fixes, notes   # v27-6: notes を追加
 
 
-def format_validation_log(alerts, fixes):
+def format_validation_log(alerts, fixes, notes=None):   # v27-6: notes 追加
     """アラート・修正ログをHTML形式で返す"""
-    if not alerts and not fixes:
+    if not alerts and not fixes and not notes:
         return ''
     parts = []
     if fixes:
@@ -4545,6 +4635,14 @@ def format_validation_log(alerts, fixes):
             'border-radius:4px;padding:8px 12px;margin:6px 0;font-size:11px;">'
             '<b>⚠️ 要確認アラート（' + str(len(alerts)) + '件）</b><br>'
             + '<br>'.join(alerts) + '</div>'
+        )
+    # v27-6: 情報通知（青枠）。警告ではなく「計算できない理由」の説明。
+    if notes:
+        parts.append(
+            '<div style="background:#e7f3fe;border:1px solid #2196f3;'
+            'border-radius:4px;padding:8px 12px;margin:6px 0;font-size:11px;">'
+            '<b>ℹ️ データ期間に関するお知らせ（' + str(len(notes)) + '件）</b><br>'
+            + '<br>'.join(notes) + '</div>'
         )
     return ''.join(parts)
 
@@ -4900,28 +4998,42 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         c15 = i(-d('売掛金'))
         # c16 棚卸資産: 集計行(棚卸資産計)優先、なければ候補リストの個別科目
         c16 = i(-df(_ACCT['棚卸資産']))       # 棚卸資産（候補リスト・個別科目対応済み）
-        # c17 その他流動資産: 集計行優先、なければ流動資産分類から
-        # 現金・受取手形・売掛金・棚卸資産系を除いた残りを合算
-        _c17_exclude = set()
-        _c17_exclude.update(_ACCT['現金'])
-        _c17_exclude.update(['受取手形', '売掛金'])
-        _c17_exclude.update(_ACCT['棚卸資産'])
-        _c17_exclude.update(_ACCT['有価証券'])    # c26で計上
-        _c17_exclude.update(_ACCT['短期貸付金'])  # c27で計上
-        # 集計行を使う場合、有価証券・短期貸付金が小計に含まれていれば控除
-        _c17_raw = dsec(_ACCT['その他流動資産'], ['流動資産'], _c17_exclude)
-        # 集計行が存在する場合は、小計に含まれる有価証券・短期貸付金を別途控除
-        _agg_hit_c17 = any(nm in name_idx for nm in _ACCT['その他流動資産'])
-        if _agg_hit_c17:
-            # 小計に短期貸付金が含まれる場合のみ控除（分類が「流動資産」なら含まれる）
-            _stl_sec = str(data_dict.get(name_idx.get('短期貸付金',-1),{}).get('分類','')).strip()
-            if '短期貸付金' in name_idx and ('流動資産' in _stl_sec):
-                _c17_raw -= da(_ACCT['短期貸付金'])
-            _yuk_sec = str(data_dict.get(name_idx.get('有価証券',-1),{}).get('分類','')).strip()
-            if '有価証券' in name_idx and ('流動資産' in _yuk_sec):
-                # 有価証券が当座資産（その他流動資産小計外）にある場合は控除不要
-                # その他流動資産小計に含まれる場合のみ控除（通常は含まれない）
-                pass
+        # c17 その他流動資産: [残差版] 流動資産合計 − 現金 − 受手 − 売掛 − 棚卸 − 有価証券 − 短期貸付
+        #   v27-4: v25 にあった残差版を復元（v26/v27 で「明細合算版」に置き換わっていた）。
+        #   明細合算版では その他流動資産小計(行22) に入らない流動資産
+        #   （例: 当座資産(その他)＝有価証券が別掲されているケース）を取りこぼし、
+        #   また B/S の流動資産合計と内訳の差も吸収できず CF照合差の原因になっていた。
+        #   （ai_case 100070 で 前期 +70,675 / 今期 -58,435 が発生）
+        #   流動資産合計を基準にすることで分類漏れも必ず c17 に吸収され、
+        #   B/S との照合が構造的に保証される。
+        #   現金/受手/売掛=c14/c15、棚卸=c16、有価証券=c26、短期貸付=c27 で別計上のため控除。
+        def _ryudo_total(period):
+            for _nm in ['流動資産合計', '流動資産計', '流動資産の部合計']:
+                if _nm in name_idx:
+                    _mark_used(_nm)
+                    return _acct_first(name_idx, data_dict, [_nm], period)
+            # v27-5: 合計行がなくても「流動資産」見出し行が金額を持つ場合はそれを合計値として使う。
+            #   入れ子小計（当座資産/棚卸資産/その他流動資産）を持つ帳票では、
+            #   明細を単純合算すると小計行を二重計上して過大になるため見出し行を優先する。
+            #   財務諸表の慣行上、見出し行に金額があればそれは分類の合計値。
+            #   （ai_case 21425 で今期照合差 +516,697,188 が発生していた）
+            if '流動資産' in name_idx:
+                _head = _acct_first(name_idx, data_dict, ['流動資産'], period)
+                if _head != 0:
+                    _mark_used('流動資産')
+                    return _head
+            # 見出し行が0の場合のみ明細合算にフォールバック
+            return _section_sum_tracked(['流動資産'], period)
+        def _cash_at(period):
+            return genkin_to if period == p_to else (genkin_from if period == p_from else 0.0)
+        def _c17_other(period):
+            return (_ryudo_total(period)
+                    - _cash_at(period)
+                    - _v('受取手形', period) - _v('売掛金', period)
+                    - ff(_ACCT['棚卸資産'], period)
+                    - fa(_ACCT['有価証券'], period)
+                    - fa(_ACCT['短期貸付金'], period))
+        _c17_raw = _c17_other(p_to) - _c17_other(p_from)
         c17 = i(-_c17_raw)
         c18 = i(d('支払手形'))
         c19 = i(d('買掛金'))
@@ -5005,7 +5117,7 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         hyt_from = _hyt(p_from)
         c29 = i(-((hyt_to - hyt_from) + c11))
         c30 = i(-d('建設仮勘定'))
-        c31 = i(-d('無形固定資産'))
+        c31 = i(-df(_ACCT['無形固定資産']))  # v27-4: 「小計」表記にも対応
         # c34 その他固定資産: 投資その他の資産合計（集計行）優先、なければ分類合算
         c34 = i(-dsec(_ACCT['投資その他資産'], ['投資その他の資産']))
         c35 = i(-d('繰延資産'))
@@ -5020,17 +5132,43 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         c42 = i(d('資本金') + df(_ACCT['資本剰余金']))  # 資本剰余金（候補リスト）
         c43 = i(d('自己株式')) if '自己株式' in name_idx else 0
 
-        # c44: 配当金＋役員賞与（繰越利益剰余金ベース自動計算）
-        _rieki_candidates = [
+        # c44: 配当金＋役員賞与（利益剰余金全体ベース自動計算） ── v27-1
+        # v27 は「繰越利益剰余金」だけを基準にしていたため、準備金・積立金の取崩に
+        # 伴う現金流出を捕捉できず CF照合差が発生していた（例: ai_case 100071 で +25,000,000）。
+        # v27-1 では「利益剰余金全体」を基準とすることで、準備金・積立金の変動も含めて
+        # 配当・利益処分による現金流出を推定する。
+        # 優先度: 1) 利益剰余金合計/利益剰余金  2) 繰越利益剰余金 + 準備金・積立金
+        _rieki_total_candidates = [
+            '利益剰余金合計',
+            '利益剰余金',
+        ]
+        _rieki_partial_candidates = [
             'うち繰越利益剰余金',
             '繰越利益剰余金',
             '繰越利益剰余金・前期末残高',
-            '利益剰余金合計',
         ]
-        rieki_key = next((k for k in _rieki_candidates if k in name_idx), None)
-        rieki_rn = name_idx.get(rieki_key) if rieki_key else None
-        if rieki_key: _mark_used(rieki_key)
-        rieki70_diff = (_dd(rieki_rn, p_to) - _dd(rieki_rn, p_from)) if rieki_rn else 0
+        _reserve_candidates = [
+            'うち準備金、積立金',
+            '準備金・積立金',
+            '利益準備金',
+        ]
+        rieki70_diff = 0
+        _rieki_total_key = next((k for k in _rieki_total_candidates if k in name_idx), None)
+        if _rieki_total_key:
+            _rn = name_idx[_rieki_total_key]
+            rieki70_diff = _dd(_rn, p_to) - _dd(_rn, p_from)
+            _mark_used(_rieki_total_key)
+        else:
+            _partial_key = next((k for k in _rieki_partial_candidates if k in name_idx), None)
+            _reserve_key = next((k for k in _reserve_candidates if k in name_idx), None)
+            if _partial_key:
+                _rn = name_idx[_partial_key]
+                rieki70_diff += _dd(_rn, p_to) - _dd(_rn, p_from)
+                _mark_used(_partial_key)
+            if _reserve_key:
+                _rn = name_idx[_reserve_key]
+                rieki70_diff += _dd(_rn, p_to) - _dd(_rn, p_from)
+                _mark_used(_reserve_key)
         c44 = -i(_dd(154, p_to) - rieki70_diff)
 
         c45 = c39+c40+c41+c42+c43+c44
@@ -5475,8 +5613,8 @@ def generate_keiei_shihyo_html(data_dict, closing_dates):
 # ------------------------------------------------------------------
 try:
     # 不整合自動検知・修正
-    _alerts, _fixes = validate_and_fix_data(data_dict, closing_dates)
-    _validation_html = format_validation_log(_alerts, _fixes)
+    _alerts, _fixes, _notes = validate_and_fix_data(data_dict, closing_dates)   # v27-6
+    _validation_html = format_validation_log(_alerts, _fixes, _notes)
     if _fixes:  print("[自動修正]", " / ".join(_fixes))
     if _alerts: print("[アラート]", " / ".join(_alerts))
 
@@ -5521,7 +5659,7 @@ except Exception as _e:
     traceback.print_exc()
 
 # ===== ビルド版数刻印（リリース確認用）=====
-_BUILD_VERSION = "cash-ai-02 / src:CF_v27_anomaly_detect / patch:データ不整合の検知・警告を追加 / build:2026-08-21"
+_BUILD_VERSION = "cash-ai-02 / src:CF_v27_6_period_guard / patch:前々期データ欠損時は前期CFを計算不能として明示 / build:2026-08-26"
 _build_stamp_comment = f'<!-- BUILD_VERSION: {_BUILD_VERSION} -->'
 _build_stamp_visible = (
     f'<div data-build-version="{_BUILD_VERSION}"'
